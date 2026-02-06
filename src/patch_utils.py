@@ -149,10 +149,11 @@ def apply_dype_to_model(model: ModelPatcher, model_type: str, width: int, height
         if base_hw_override is not None:
             m.model.diffusion_model._dype_base_hw = base_hw_override
 
-        def dype_patchify_and_embed(self, x, cap_feats, cap_mask, t, num_tokens, transformer_options={}):
+        def dype_patchify_and_embed(self, x, cap_feats, cap_mask, t, num_tokens, ref_latents=[], ref_contexts=[], siglip_feats=[], transformer_options={}):
             bsz = len(x)
             pH = pW = self.patch_size
             device = x[0].device
+            cap_feats = self.cap_embedder(cap_feats)
 
             if self.pad_tokens_multiple is not None:
                 pad_extra = (-cap_feats.shape[1]) % self.pad_tokens_multiple
@@ -189,11 +190,11 @@ def apply_dype_to_model(model: ModelPatcher, model_type: str, width: int, height
             H_tokens = math.ceil(original_hw[0] / pH)
             W_tokens = math.ceil(original_hw[1] / pW)
             
-            token_stride_y = (original_hw[0] / max(1, H_tokens)) * rope_scale_y
-            token_stride_x = (original_hw[1] / max(1, W_tokens)) * rope_scale_x
-            
-            shift_y = h_start * (original_hw[0] / max(1, H_tokens))
-            shift_x = w_start * (original_hw[1] / max(1, W_tokens))
+            token_stride_y = rope_scale_y
+            token_stride_x = rope_scale_x
+
+            shift_y = h_start
+            shift_x = w_start
             
             def _build_spatial_pos_ids(batch: int, total_len: int, width_tokens: int, cap_len: int, stride_y: float, stride_x: float, h_start: float, w_start: float, device: torch.device):
                 base_pos = torch.arange(total_len, device=device, dtype=torch.float32)
@@ -224,14 +225,15 @@ def apply_dype_to_model(model: ModelPatcher, model_type: str, width: int, height
                 cap_feats = layer(cap_feats, cap_mask, freqs_cis[:, :cap_pos_ids.shape[1]], transformer_options=transformer_options)
 
             padded_img_mask = None
+            timestep_zero_index = None
             for layer in self.noise_refiner:
-                x = layer(x, padded_img_mask, freqs_cis[:, cap_pos_ids.shape[1]:], t, transformer_options=transformer_options)
+                x = layer(x, padded_img_mask, freqs_cis[:, cap_pos_ids.shape[1]:], t, timestep_zero_index=timestep_zero_index, transformer_options=transformer_options)
 
             padded_full_embed = torch.cat((cap_feats, x), dim=1)
             mask = None
             img_sizes = [(H, W)] * bsz
             l_effective_cap_len = [cap_feats.shape[1]] * bsz
-            return padded_full_embed, mask, img_sizes, l_effective_cap_len, freqs_cis
+            return padded_full_embed, mask, img_sizes, l_effective_cap_len, freqs_cis, timestep_zero_index
 
         m.add_object_patch(
             "diffusion_model.patchify_and_embed",
