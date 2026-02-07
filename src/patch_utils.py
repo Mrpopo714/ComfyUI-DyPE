@@ -11,26 +11,46 @@ from .models.nunchaku import PosEmbedNunchaku
 from .models.qwen import PosEmbedQwen
 from .models.zimage import PosEmbedZImage
 
+def _is_flux2_model(model_obj) -> bool:
+    model_cfg = getattr(model_obj, "model_config", None)
+    if model_cfg is None:
+        return False
+
+    model_cfg_name = model_cfg.__class__.__name__.lower()
+    if model_cfg_name == "flux2":
+        return True
+
+    unet_cfg = getattr(model_cfg, "unet_config", None)
+    if isinstance(unet_cfg, dict):
+        return str(unet_cfg.get("image_model", "")).lower() == "flux2"
+
+    return False
+
 def apply_dype_to_model(model: ModelPatcher, model_type: str, width: int, height: int, method: str, yarn_alt_scaling: bool, enable_dype: bool, dype_scale: float, dype_exponent: float, base_shift: float, max_shift: float, base_resolution: int = 1024, dype_start_sigma: float = 1.0) -> ModelPatcher:
     m = model.clone()
 
     is_nunchaku = False
     is_qwen = False
     is_z_image = False
+    is_flux2 = False
 
     if model_type == "nunchaku":
         is_nunchaku = True
     elif model_type == "qwen":
         is_qwen = True
-    elif model_type == "z_image":
+    elif model_type in ("zimage", "z_image"):
         is_z_image = True
+    elif model_type == "flux2":
+        is_flux2 = True
     elif model_type == "flux":
         pass
     else: # auto
         if hasattr(m.model, "diffusion_model"):
             dm = m.model.diffusion_model
             model_class_name = dm.__class__.__name__
-            if "QwenImage" in model_class_name:
+            if _is_flux2_model(m.model):
+                is_flux2 = True
+            elif "QwenImage" in model_class_name:
                 is_qwen = True
             elif hasattr(dm, "rope_embedder"):
                 is_z_image = True
@@ -39,7 +59,7 @@ def apply_dype_to_model(model: ModelPatcher, model_type: str, width: int, height
         else:
             raise ValueError("The provided model is not a compatible model.")
 
-    new_dype_params = (width, height, base_shift, max_shift, method, yarn_alt_scaling, base_resolution, dype_start_sigma, is_nunchaku, is_qwen, is_z_image)
+    new_dype_params = (width, height, base_shift, max_shift, method, yarn_alt_scaling, base_resolution, dype_start_sigma, is_nunchaku, is_qwen, is_z_image, is_flux2)
 
     should_patch_schedule = True
     if hasattr(m.model, "_dype_params"):
@@ -67,8 +87,16 @@ def apply_dype_to_model(model: ModelPatcher, model_type: str, width: int, height
         derived_base_patches = max(base_patch_h_tokens, base_patch_w_tokens)
         derived_base_seq_len = base_patch_h_tokens * base_patch_w_tokens
     else:
-        derived_base_patches = (base_resolution // 8) // 2
+        derived_base_patches = max(1, (base_resolution // 8) // max(1, int(patch_size)))
         derived_base_seq_len = derived_base_patches * derived_base_patches
+
+    schedule_base_shift = base_shift
+    schedule_max_shift = max_shift
+    if is_flux2:
+        native_flux_shift = float(getattr(m.model.model_sampling, "shift", max_shift))
+        flux_shift_reference = 1.15
+        schedule_base_shift = native_flux_shift * (base_shift / flux_shift_reference)
+        schedule_max_shift = native_flux_shift * (max_shift / flux_shift_reference)
 
     if enable_dype and should_patch_schedule:
         try:
@@ -81,10 +109,10 @@ def apply_dype_to_model(model: ModelPatcher, model_type: str, width: int, height
                 max_seq_len = image_seq_len
 
                 if max_seq_len <= base_seq_len:
-                    dype_shift = base_shift
+                    dype_shift = schedule_base_shift
                 else:
-                    slope = (max_shift - base_shift) / (max_seq_len - base_seq_len)
-                    intercept = base_shift - slope * base_seq_len
+                    slope = (schedule_max_shift - schedule_base_shift) / (max_seq_len - base_seq_len)
+                    intercept = schedule_base_shift - slope * base_seq_len
                     dype_shift = image_seq_len * slope + intercept
 
                 dype_shift = max(0.0, dype_shift)
@@ -127,14 +155,16 @@ def apply_dype_to_model(model: ModelPatcher, model_type: str, width: int, height
         embedder_cls = PosEmbedNunchaku
     elif is_qwen:
         embedder_cls = PosEmbedQwen
+    elif is_flux2:
+        embedder_cls = PosEmbedZImage
     elif is_z_image:
         embedder_cls = PosEmbedZImage
 
-    embedder_base_patches = derived_base_patches if is_z_image else None
+    embedder_base_patches = derived_base_patches if (is_z_image or is_flux2) else None
 
     new_pe_embedder = embedder_cls(
         theta, axes_dim, method, yarn_alt_scaling, enable_dype,
-        dype_scale, dype_exponent, base_resolution, dype_start_sigma, embedder_base_patches
+        dype_scale, dype_exponent, base_resolution, dype_start_sigma, embedder_base_patches, (1, 2)
     )
         
     m.add_object_patch(target_patch_path, new_pe_embedder)
@@ -240,6 +270,11 @@ def apply_dype_to_model(model: ModelPatcher, model_type: str, width: int, height
             types.MethodType(dype_patchify_and_embed, m.model.diffusion_model)
         )
 
+    flux2_start_scale = min(
+        float(base_resolution) / max(1.0, float(height)),
+        float(base_resolution) / max(1.0, float(width)),
+    )
+
     sigma_max = m.model.model_sampling.sigma_max.item()
     
     def dype_wrapper_function(model_function, args_dict):
@@ -248,8 +283,7 @@ def apply_dype_to_model(model: ModelPatcher, model_type: str, width: int, height
             current_sigma = timestep_tensor.flatten()[0].item()
             
             if sigma_max > 0:
-                normalized_timestep = min(max(current_sigma / sigma_max, 0.0), 1.0)
-                new_pe_embedder.set_timestep(normalized_timestep)
+                new_pe_embedder.set_timestep(min(max(current_sigma / sigma_max, 0.0), 1.0))
         
         input_x, c = args_dict.get("input"), args_dict.get("c", {})
 
@@ -260,6 +294,25 @@ def apply_dype_to_model(model: ModelPatcher, model_type: str, width: int, height
             transformer_options["dype_requested_hw"] = (height, width)
             transformer_options["dype_base_resolution"] = base_resolution
             c["transformer_options"] = transformer_options
+
+        if is_flux2:
+            c = dict(c)
+            transformer_options = dict(c.get("transformer_options", {}))
+            rope_options = dict(transformer_options.get("rope_options", {}))
+
+            base_scale_x = float(rope_options.get("_dype_base_scale_x", rope_options.get("scale_x", 1.0)))
+            base_scale_y = float(rope_options.get("_dype_base_scale_y", rope_options.get("scale_y", 1.0)))
+
+            rope_options["_dype_base_scale_x"] = base_scale_x
+            rope_options["_dype_base_scale_y"] = base_scale_y
+            rope_options["scale_x"] = base_scale_x * flux2_start_scale
+            rope_options["scale_y"] = base_scale_y * flux2_start_scale
+
+            transformer_options["rope_options"] = rope_options
+            c["transformer_options"] = transformer_options
+
+            if hasattr(new_pe_embedder, "set_scale_hint"):
+                new_pe_embedder.set_scale_hint(1.0 / max(1e-6, flux2_start_scale))
 
         return model_function(input_x, args_dict.get("timestep"), **c)
 

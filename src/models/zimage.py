@@ -31,7 +31,12 @@ class PosEmbedZImage(DyPEBasePosEmbed):
         """
         if not self.dype: return pos
 
-        image_mask = (pos[..., 1] != 0) | (pos[..., 2] != 0)
+        if len(self.spatial_axes) == 0:
+            return pos
+
+        image_mask = torch.zeros_like(pos[..., 0], dtype=torch.bool)
+        for axis in self.spatial_axes:
+            image_mask = image_mask | (pos[..., axis] != 0)
         if not image_mask.any(): return pos
 
         blend_val = self._blend_to_full_scale()
@@ -40,7 +45,7 @@ class PosEmbedZImage(DyPEBasePosEmbed):
         blend = torch.tensor(blend_val, device=pos.device, dtype=pos.dtype)
         pos_rescaled = pos.clone()
 
-        for axis in (1, 2):
+        for axis in self.spatial_axes:
             coords = pos[..., axis]
             coords_image = coords[image_mask]
             if coords_image.numel() <= 1: continue
@@ -86,11 +91,10 @@ class PosEmbedZImage(DyPEBasePosEmbed):
                 'use_real': True, 'repeat_interleave_real': True, 'freqs_dtype': freqs_dtype
             }
 
-            is_spatial = (i > 0)
+            is_spatial = self._is_spatial_axis(i)
 
             if is_spatial and scale_global > 1.0:
-                grid_idx = i - 1
-                base_axis_len = self.base_patch_grid[grid_idx] if grid_idx < len(self.base_patch_grid) else self.base_patches
+                base_axis_len = self._base_axis_len(i)
 
                 # VISION YARN
                 if self.method == 'vision_yarn':

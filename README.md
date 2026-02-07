@@ -98,11 +98,12 @@ Using the node is straightforward and designed for minimal workflow disruption.
 *   **`model_type`**:
     *   **`auto`**: Attempts to automatically detect the model architecture. Recommended.
     *   **`flux`**: Forces Standard Flux logic.
+    *   **`flux2`**: Forces Flux2 logic (dynamic RoPE scale progression from base resolution to target resolution).
     *   **`nunchaku`**: Forces Nunchaku (Quantized Flux) logic.
     *   **`qwen`**: Forces Qwen Image logic.
     *   **`zimage`**: Forces Z-Image (Lumina 2) logic.
 *   **`base_resolution`**: The native resolution the model was trained on.
-    *   Flux / Z-Image: `1024`
+    *   Flux / Flux2 / Z-Image: `1024`
     *   Qwen: `1328` (Recommended setting for Qwen models)
 
 #### 2. Method Selection
