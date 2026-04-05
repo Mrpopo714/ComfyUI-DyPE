@@ -86,9 +86,12 @@ def apply_dype_to_model(model: ModelPatcher, model_type: str, width: int, height
             image_seq_len = (padded_h // patch_size) * (padded_w // patch_size)
 
             base_seq_len = derived_base_seq_len
-            max_seq_len = image_seq_len
+            # Use a fixed reference maximum (2x linear scale = 4x patches) so that
+            # base_shift applies at base_resolution and max_shift applies at 2x
+            # base_resolution, with true linear interpolation in between.
+            max_seq_len = derived_base_seq_len * 4
 
-            if max_seq_len <= base_seq_len:
+            if image_seq_len <= base_seq_len:
                 dype_shift = base_shift
             else:
                 slope = (max_shift - base_shift) / (max_seq_len - base_seq_len)

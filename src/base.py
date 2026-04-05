@@ -85,15 +85,25 @@ class DyPEBasePosEmbed(nn.Module):
             current_patches = self._axis_token_span(axis_pos)
             
             common_kwargs = {'dim': axis_dim, 'pos': axis_pos, 'theta': self.theta, 'use_real': True, 'repeat_interleave_real': True, 'freqs_dtype': freqs_dtype}
-            dype_kwargs = {'dype': self.dype, 'current_timestep': self.current_timestep, 'dype_scale': self.dype_scale, 'dype_exponent': self.dype_exponent, 'ntk_scale': scale_global, 'override_mscale': current_mscale}
 
             if i > 0:
                 base_axis_len = self.base_patch_grid[i-1] if (n_axes >=3 and i-1 < len(self.base_patch_grid)) else self.base_patches
                 
                 scale_local = max(1.0, current_patches / base_axis_len)
-                dype_kwargs['linear_scale'] = scale_local 
-                
-                if scale_global > 1.0:
+
+                if self.yarn_alt_scaling:
+                    # Anisotropic: each spatial axis uses its own NTK scale so
+                    # axes that don't need extrapolation are left at ntk_scale=1.
+                    ntk_scale = scale_local
+                    axis_mscale = self._get_mscale(ntk_scale) if ntk_scale > 1.0 else 1.0
+                else:
+                    # Isotropic: all spatial axes share the global max NTK scale.
+                    ntk_scale = scale_global
+                    axis_mscale = current_mscale
+
+                dype_kwargs = {'dype': self.dype, 'current_timestep': self.current_timestep, 'dype_scale': self.dype_scale, 'dype_exponent': self.dype_exponent, 'ntk_scale': ntk_scale, 'override_mscale': axis_mscale, 'linear_scale': scale_local}
+
+                if ntk_scale > 1.0:
                     cos, sin = get_1d_dype_yarn_pos_embed(**common_kwargs, ori_max_pe_len=base_axis_len, **dype_kwargs)
                 else:
                     cos, sin = get_1d_ntk_pos_embed(**common_kwargs, ntk_factor=1.0)
@@ -185,14 +195,27 @@ class DyPEBasePosEmbed(nn.Module):
             common_kwargs = {'dim': axis_dim, 'pos': axis_pos, 'theta': self.theta, 'use_real': True, 'repeat_interleave_real': True, 'freqs_dtype': freqs_dtype}
             
             ntk_factor = 1.0
-            if i > 0 and scale_global > 1.0:
-                base_ntk = scale_global ** (axis_dim / (axis_dim - 2))
-                if self.dype:
-                    k_t = self.dype_scale * (self.current_timestep ** self.dype_exponent)
-                    ntk_factor = base_ntk ** k_t
+            if i > 0:
+                if self.yarn_alt_scaling:
+                    # Anisotropic: per-axis NTK factor so only axes that
+                    # actually require extrapolation are up-scaled.
+                    base_axis_len = self.base_patch_grid[i-1] if (n_axes >= 3 and i-1 < len(self.base_patch_grid)) else self.base_patches
+                    current_patches = self._axis_token_span(axis_pos)
+                    axis_scale = max(1.0, current_patches / base_axis_len)
+                    base_ntk = axis_scale ** (axis_dim / (axis_dim - 2))
+                    effective_scale = axis_scale
                 else:
-                    ntk_factor = base_ntk
-                ntk_factor = max(1.0, ntk_factor)
+                    # Isotropic: use the global max scale (original behaviour).
+                    base_ntk = scale_global ** (axis_dim / (axis_dim - 2)) if scale_global > 1.0 else 1.0
+                    effective_scale = scale_global
+
+                if effective_scale > 1.0:
+                    if self.dype:
+                        k_t = self.dype_scale * (self.current_timestep ** self.dype_exponent)
+                        ntk_factor = base_ntk ** k_t
+                    else:
+                        ntk_factor = base_ntk
+                    ntk_factor = max(1.0, ntk_factor)
             
             cos, sin = get_1d_ntk_pos_embed(**common_kwargs, ntk_factor=ntk_factor)
             components.append((cos, sin))
