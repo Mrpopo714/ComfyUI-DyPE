@@ -63,7 +63,17 @@ class PosEmbedFlux2Klein(DyPEBasePosEmbed):
         n_axes = pos.shape[-1]
         components = []
 
-        scale_global = self.external_scale_hint
+        # Compute global scale from actual position spans for NTK scaling and mscale.
+        # Using position IDs instead of the isotropic external hint correctly handles
+        # non-square images without stretching the shorter dimension.
+        if n_axes >= 3:
+            h_span = self._axis_token_span(pos[..., 1])
+            w_span = self._axis_token_span(pos[..., 2])
+            scale_global = max(1.0, max(h_span / self.base_patch_grid[0], w_span / self.base_patch_grid[1]))
+        else:
+            max_current_patches = self._axis_token_span(pos)
+            scale_global = max(1.0, max_current_patches / self.base_patches)
+
         current_mscale = self._get_mscale(scale_global) if (scale_global > 1.0 and self.dype) else 1.0
 
         for i in range(n_axes):
@@ -80,18 +90,23 @@ class PosEmbedFlux2Klein(DyPEBasePosEmbed):
                 grid_idx = i - 1
                 base_axis_len = self.base_patch_grid[grid_idx] if grid_idx < len(self.base_patch_grid) else self.base_patches
 
+                # Per-axis scale for linear interpolation fixes stretching on non-square images.
+                # scale_global is still used for the NTK part (vision_yarn decoupling).
+                current_patches = self._axis_token_span(axis_pos)
+                scale_local = max(1.0, current_patches / base_axis_len)
+
                 if self.method == 'vision_yarn':
                     dype_kwargs = {
                         'dype': self.dype, 'current_timestep': self.current_timestep,
                         'dype_scale': self.dype_scale, 'dype_exponent': self.dype_exponent,
                         'ntk_scale': scale_global, 'override_mscale': current_mscale,
-                        'linear_scale': scale_global
+                        'linear_scale': scale_local
                     }
                     cos, sin = get_1d_dype_yarn_pos_embed(
                         **common_kwargs, ori_max_pe_len=base_axis_len, **dype_kwargs
                     )
                 elif self.method == 'yarn':
-                    fake_current_len = int(base_axis_len * scale_global)
+                    fake_current_len = int(base_axis_len * scale_local)
                     max_pe_len = torch.tensor(fake_current_len, dtype=freqs_dtype, device=pos.device)
                     dype_kwargs = {
                         'dype': self.dype, 'current_timestep': self.current_timestep,
@@ -106,7 +121,7 @@ class PosEmbedFlux2Klein(DyPEBasePosEmbed):
                         cos = cos * mscale_tensor
                         sin = sin * mscale_tensor
                 else:
-                    base_ntk = scale_global ** (axis_dim / (axis_dim - 2))
+                    base_ntk = scale_local ** (axis_dim / (axis_dim - 2))
                     if self.dype:
                         k_t = self.dype_scale * (self.current_timestep ** self.dype_exponent)
                         ntk_factor = base_ntk ** k_t

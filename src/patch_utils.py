@@ -80,34 +80,41 @@ def apply_dype_to_model(model: ModelPatcher, model_type: str, width: int, height
         derived_base_seq_len = derived_base_patches * derived_base_patches
 
     if enable_dype and should_patch_schedule:
-        try:
-            if isinstance(m.model.model_sampling, model_sampling.ModelSamplingFlux) or is_qwen or is_z_image or is_flux2:
-                latent_h, latent_w = height // 8, width // 8
-                padded_h, padded_w = math.ceil(latent_h / patch_size) * patch_size, math.ceil(latent_w / patch_size) * patch_size
-                image_seq_len = (padded_h // patch_size) * (padded_w // patch_size)
+        if isinstance(m.model.model_sampling, model_sampling.ModelSamplingFlux) or is_qwen or is_z_image or is_flux2:
+            latent_h, latent_w = height // 8, width // 8
+            padded_h, padded_w = math.ceil(latent_h / patch_size) * patch_size, math.ceil(latent_w / patch_size) * patch_size
+            image_seq_len = (padded_h // patch_size) * (padded_w // patch_size)
 
-                base_seq_len = derived_base_seq_len
-                max_seq_len = image_seq_len
+            base_seq_len = derived_base_seq_len
+            max_seq_len = image_seq_len
 
-                if max_seq_len <= base_seq_len:
-                    dype_shift = base_shift
+            if max_seq_len <= base_seq_len:
+                dype_shift = base_shift
+            else:
+                slope = (max_shift - base_shift) / (max_seq_len - base_seq_len)
+                intercept = base_shift - slope * base_seq_len
+                dype_shift = image_seq_len * slope + intercept
+
+            dype_shift = max(0.0, dype_shift)
+
+            try:
+                # Prefer the model's own sampling class so any model-specific behaviour
+                # (e.g. Flux Klein variants) is preserved when patching the shift.
+                original_cls = type(m.model.model_sampling)
+                if issubclass(original_cls, model_sampling.ModelSamplingFlux):
+                    if model_sampling.CONST not in original_cls.__mro__:
+                        DypeClass = type('DypeModelSamplingFlux', (original_cls, model_sampling.CONST), {})
+                    else:
+                        DypeClass = type('DypeModelSamplingFlux', (original_cls,), {})
                 else:
-                    slope = (max_shift - base_shift) / (max_seq_len - base_seq_len)
-                    intercept = base_shift - slope * base_seq_len
-                    dype_shift = image_seq_len * slope + intercept
-
-                dype_shift = max(0.0, dype_shift)
-
-                class DypeModelSamplingFlux(model_sampling.ModelSamplingFlux, model_sampling.CONST):
-                    pass
-
-                new_model_sampler = DypeModelSamplingFlux(m.model.model_config)
+                    class DypeClass(model_sampling.ModelSamplingFlux, model_sampling.CONST):
+                        pass
+                new_model_sampler = DypeClass(m.model.model_config)
                 new_model_sampler.set_parameters(shift=dype_shift)
-
                 m.add_object_patch("model_sampling", new_model_sampler)
                 m.model._dype_params = new_dype_params
-        except:
-            pass
+            except Exception as e:
+                print(f"[DyPE] Warning: failed to patch noise schedule (base_shift/max_shift will not apply): {e}")
 
     elif not enable_dype:
         if hasattr(m.model, "_dype_params"):
@@ -271,13 +278,6 @@ def apply_dype_to_model(model: ModelPatcher, model_type: str, width: int, height
             transformer_options["dype_requested_hw"] = (height, width)
             transformer_options["dype_base_resolution"] = base_resolution
             c["transformer_options"] = transformer_options
-        elif is_flux2 and isinstance(input_x, torch.Tensor) and input_x.dim() >= 4:
-            target_hw = (height, width)
-            raw_scale_y = float(base_resolution) / max(1.0, float(target_hw[0]))
-            raw_scale_x = float(base_resolution) / max(1.0, float(target_hw[1]))
-            iso_scale = min(raw_scale_y, raw_scale_x)
-            freq_scale_factor = 1.0 / iso_scale
-            new_pe_embedder.set_scale_hint(freq_scale_factor)
 
         return model_function(input_x, args_dict.get("timestep"), **c)
 
