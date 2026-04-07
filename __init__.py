@@ -46,7 +46,7 @@ class DyPE_FLUX(io.ComfyNode):
                     default=False,
                     label_on="Anisotropic (High-Res)",
                     label_off="Isotropic (Stable Default)",
-                    tooltip="[YARN Only] Alternate scaling for ultra-high resolutions. Not used for 'vision_yarn'.",
+                    tooltip="Use per-axis scaling for non-square images. Works with 'vision_yarn' and 'yarn' methods. Best for ultra-wide or ultra-tall resolutions.",
                 ),
                 io.Boolean.Input(
                     "enable_dype",
@@ -68,25 +68,21 @@ class DyPE_FLUX(io.ComfyNode):
                 io.Float.Input(
                     "dype_scale",
                     default=2.0, min=0.0, max=8.0, step=0.1,
-                    optional=True,
                     tooltip="Controls DyPE magnitude (λs). Default is 2.0."
                 ),
                 io.Float.Input(
                     "dype_exponent",
                     default=2.0, min=0.0, max=1000.0, step=0.1,
-                    optional=True,
                     tooltip="Controls DyPE decay speed (λt). Higher = Faster decay. 2.0=Quadratic."
                 ),
                 io.Float.Input(
                     "base_shift",
                     default=0.5, min=0.0, max=10.0, step=0.01,
-                    optional=True,
                     tooltip="Advanced: Base shift for the noise schedule (mu)."
                 ),
                 io.Float.Input(
                     "max_shift",
                     default=1.15, min=0.0, max=10.0, step=0.01,
-                    optional=True,
                     tooltip="Advanced: Max shift for the noise schedule (mu) at high resolutions."
                 ),
             ],
@@ -99,7 +95,7 @@ class DyPE_FLUX(io.ComfyNode):
         )
 
     @classmethod
-    def execute(cls, model, width: int, height: int, model_type: str, method: str, yarn_alt_scaling: bool, enable_dype: bool, base_resolution: int = 1024, dype_start_sigma: float = 1.0, dype_scale: float = 2.0, dype_exponent: float = 2.0, base_shift: float = 0.5, max_shift: float = 1.15) -> io.NodeOutput:
+    def execute(cls, model, width: int, height: int, model_type: str, method: str, yarn_alt_scaling: bool, enable_dype: bool, base_resolution: int, dype_start_sigma: float, dype_scale: float, dype_exponent: float, base_shift: float, max_shift: float) -> io.NodeOutput:
         patched_model = apply_dype_to_model(model, model_type, width, height, method, yarn_alt_scaling, enable_dype, dype_scale, dype_exponent, base_shift, max_shift, base_resolution, dype_start_sigma)
         return io.NodeOutput(patched_model)
 
