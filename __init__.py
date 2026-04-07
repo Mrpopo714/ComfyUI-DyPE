@@ -31,9 +31,9 @@ class DyPE_FLUX(io.ComfyNode):
                 ),
                 io.Combo.Input(
                     "model_type",
-                    options=["auto", "flux", "flux2", "nunchaku", "qwen", "zimage"],
+                    options=["auto", "flux", "flux2", "nvfp4", "nunchaku", "qwen", "zimage"],
                     default="auto",
-                    tooltip="Specify the model architecture. 'auto' usually works",
+                    tooltip="Specify the model architecture. 'auto' usually works. Use 'nvfp4' for Flux 2 Klein NVFP4 models.",
                 ),
                 io.Combo.Input(
                     "method",

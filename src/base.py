@@ -9,7 +9,7 @@ class DyPEBasePosEmbed(nn.Module):
     Handles the calculation of DyPE scaling factors and raw (cos, sin) components.
     Subclasses must implement `forward` to format the output for specific model architectures.
     """
-    def __init__(self, theta: int, axes_dim: list[int], method: str = 'yarn', yarn_alt_scaling: bool = False, dype: bool = True, dype_scale: float = 2.0, dype_exponent: float = 2.0, base_resolution: int = 1024, dype_start_sigma: float = 1.0, base_patch_grid: tuple[int, int] = None):
+    def __init__(self, theta: int, axes_dim: list[int], method: str = 'yarn', yarn_alt_scaling: bool = False, dype: bool = True, dype_scale: float = 2.0, dype_exponent: float = 2.0, base_resolution: int = 1024, dype_start_sigma: float = 1.0, base_patch_grid: tuple[int, int] = None, spatial_axes: tuple[int, ...] = (1, 2)):
         super().__init__()
         self.theta = theta
         self.axes_dim = axes_dim
@@ -22,6 +22,9 @@ class DyPEBasePosEmbed(nn.Module):
         self.dype_start_sigma = max(0.001, min(1.0, dype_start_sigma)) # Clamp 0.001-1.0
         
         self.current_timestep = 1.0
+
+        # Which axes are spatial (H, W). Non-spatial axes (time, extra) are not scaled.
+        self.spatial_axes = set(spatial_axes)
         
         # Determine Base Patch Grid and Max Patches
         if base_patch_grid is None:
@@ -87,8 +90,9 @@ class DyPEBasePosEmbed(nn.Module):
             common_kwargs = {'dim': axis_dim, 'pos': axis_pos, 'theta': self.theta, 'use_real': True, 'repeat_interleave_real': True, 'freqs_dtype': freqs_dtype}
             dype_kwargs = {'dype': self.dype, 'current_timestep': self.current_timestep, 'dype_scale': self.dype_scale, 'dype_exponent': self.dype_exponent, 'ntk_scale': scale_global, 'override_mscale': current_mscale}
 
-            if i > 0:
-                base_axis_len = self.base_patch_grid[i-1] if (n_axes >=3 and i-1 < len(self.base_patch_grid)) else self.base_patches
+            if i in self.spatial_axes:
+                grid_idx = list(sorted(self.spatial_axes)).index(i)
+                base_axis_len = self.base_patch_grid[grid_idx] if grid_idx < len(self.base_patch_grid) else self.base_patches
                 
                 scale_local = max(1.0, current_patches / base_axis_len)
                 dype_kwargs['linear_scale'] = scale_local 
@@ -125,9 +129,10 @@ class DyPEBasePosEmbed(nn.Module):
                 dype_kwargs = {'dype': self.dype, 'current_timestep': self.current_timestep, 'dype_scale': self.dype_scale, 'dype_exponent': self.dype_exponent}
 
                 current_patches = self._axis_token_span(axis_pos)
-                base_axis_len = self.base_patch_grid[i-1] if (n_axes >=3 and i > 0 and i-1 < len(self.base_patch_grid)) else self.base_patches
+                grid_idx = list(sorted(self.spatial_axes)).index(i) if i in self.spatial_axes else -1
+                base_axis_len = self.base_patch_grid[grid_idx] if (grid_idx >= 0 and grid_idx < len(self.base_patch_grid)) else self.base_patches
 
-                if i > 0 and current_patches > base_axis_len:
+                if i in self.spatial_axes and current_patches > base_axis_len:
                     max_pe_len = torch.tensor(current_patches, dtype=freqs_dtype, device=pos.device)
                     cos, sin = get_1d_yarn_pos_embed(**common_kwargs, max_pe_len=max_pe_len, ori_max_pe_len=base_axis_len, **dype_kwargs, use_aggressive_mscale=True)
                 else:
@@ -152,7 +157,7 @@ class DyPEBasePosEmbed(nn.Module):
                 axis_pos = pos[..., i]
                 axis_dim = self.axes_dim[i]
                 
-                if i > 0 and needs_extrapolation:
+                if i in self.spatial_axes and needs_extrapolation:
                     offset_indices = axis_pos.long() - axis_pos.long().min()
                     pos_indices = offset_indices.view(-1)
                     pos_indices = torch.clamp(pos_indices, max=cos_full_spatial.shape[0]-1)
@@ -185,7 +190,7 @@ class DyPEBasePosEmbed(nn.Module):
             common_kwargs = {'dim': axis_dim, 'pos': axis_pos, 'theta': self.theta, 'use_real': True, 'repeat_interleave_real': True, 'freqs_dtype': freqs_dtype}
             
             ntk_factor = 1.0
-            if i > 0 and scale_global > 1.0:
+            if i in self.spatial_axes and scale_global > 1.0:
                 base_ntk = scale_global ** (axis_dim / (axis_dim - 2))
                 if self.dype:
                     k_t = self.dype_scale * (self.current_timestep ** self.dype_exponent)

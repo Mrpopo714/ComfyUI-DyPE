@@ -23,9 +23,9 @@ def apply_dype_to_model(model: ModelPatcher, model_type: str, width: int, height
         is_nunchaku = True
     elif model_type == "qwen":
         is_qwen = True
-    elif model_type == "z_image":
+    elif model_type == "zimage":
         is_z_image = True
-    elif model_type == "flux2":
+    elif model_type in ("flux2", "nvfp4"):
         is_flux2 = True
     elif model_type == "flux":
         pass
@@ -44,6 +44,11 @@ def apply_dype_to_model(model: ModelPatcher, model_type: str, width: int, height
                 if model_config is not None:
                     unet_config = getattr(model_config, "unet_config", {})
                     if unet_config.get("image_model") == "flux2":
+                        is_flux2 = True
+                # Fallback: detect Flux 2 by 4-axis pe_embedder
+                if not is_flux2 and hasattr(dm, "pe_embedder"):
+                    pe = dm.pe_embedder
+                    if hasattr(pe, "axes_dim") and len(pe.axes_dim) == 4:
                         is_flux2 = True
         else:
             raise ValueError("The provided model is not a compatible model.")

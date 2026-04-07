@@ -42,7 +42,7 @@ It works by taking advantage of the spectral progression inherent to the diffusi
 This node provides a seamless, "plug-and-play" integration of DyPE into your workflow.
 
 **✨ Key Features:**
-*   **Multi-Architecture Support:** Supports **FLUX** (Standard), **Nunchaku** (Quantized Flux), **Qwen Image**, and **Z-Image** (Lumina 2).
+*   **Multi-Architecture Support:** Supports **FLUX** (Standard), **FLUX 2 Klein** (including **NVFP4**), **Nunchaku** (Quantized Flux), **Qwen Image**, and **Z-Image** (Lumina 2).
 *   **High-Resolution Generation:** Push models to 4096x4096 and beyond.
 *   **Single-Node Integration:** Simply place the `DyPE for FLUX` node after your model loader to patch the model. No complex workflow changes required.
 *   **Full Compatibility:** Works seamlessly with your existing ComfyUI workflows, samplers, schedulers, and other optimization nodes.
@@ -99,11 +99,12 @@ Using the node is straightforward and designed for minimal workflow disruption.
     *   **`auto`**: Attempts to automatically detect the model architecture. Recommended.
     *   **`flux`**: Forces Standard Flux logic.
     *   **`flux2`**: Forces Flux 2 Klein logic.
+    *   **`nvfp4`**: Forces Flux 2 Klein NVFP4 logic (same as `flux2`, provided for convenience).
     *   **`nunchaku`**: Forces Nunchaku (Quantized Flux) logic.
     *   **`qwen`**: Forces Qwen Image logic.
     *   **`zimage`**: Forces Z-Image (Lumina 2) logic.
 *   **`base_resolution`**: The native resolution the model was trained on.
-    *   Flux / Z-Image: `1024`
+    *   Flux / Flux 2 Klein / Z-Image: `1024`
     *   Qwen: `1328` (Recommended setting for Qwen models)
 
 #### 2. Method Selection
@@ -141,6 +142,13 @@ Using the node is straightforward and designed for minimal workflow disruption.
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
 
 ## Changelog
+
+#### v2.4.0
+*   **Flux 2 Klein 9B NVFP4 Support:** Added full support for Flux 2 Klein 9B models, including NVFP4 quantized variants.
+*   **4-Axis RoPE Fix:** Fixed incorrect spatial scaling of non-spatial axes (axis 3+) in Flux 2's 4-axis positional encoding layout.
+*   **New `nvfp4` Model Type:** Added explicit `nvfp4` model type option for Flux 2 Klein NVFP4 models.
+*   **Improved Auto-Detection:** Added fallback detection based on `axes_dim` length for more robust Flux 2 model identification.
+*   **Bug Fix:** Fixed `zimage` model type not being recognized from the dropdown selector.
 
 #### v2.3.0
 *   **Z-Image Overhaul:** Fixed geometric stretching artifacts
