@@ -72,10 +72,14 @@ class DyPEBasePosEmbed(nn.Module):
         if n_axes >= 3:
             h_span = self._axis_token_span(pos[..., 1])
             w_span = self._axis_token_span(pos[..., 2])
-            scale_global = max(1.0, max(h_span/self.base_patch_grid[0], w_span/self.base_patch_grid[1]))
+            scale_h = max(1.0, h_span / self.base_patch_grid[0])
+            scale_w = max(1.0, w_span / self.base_patch_grid[1])
+            scale_global = max(scale_h, scale_w)
         else:
             max_current_patches = self._axis_token_span(pos)
             scale_global = max(1.0, max_current_patches / self.base_patches)
+            scale_h = scale_global
+            scale_w = scale_global
             
         current_mscale = self._get_mscale(scale_global)
 
@@ -85,15 +89,21 @@ class DyPEBasePosEmbed(nn.Module):
             current_patches = self._axis_token_span(axis_pos)
             
             common_kwargs = {'dim': axis_dim, 'pos': axis_pos, 'theta': self.theta, 'use_real': True, 'repeat_interleave_real': True, 'freqs_dtype': freqs_dtype}
-            dype_kwargs = {'dype': self.dype, 'current_timestep': self.current_timestep, 'dype_scale': self.dype_scale, 'dype_exponent': self.dype_exponent, 'ntk_scale': scale_global, 'override_mscale': current_mscale}
 
             if i > 0:
-                base_axis_len = self.base_patch_grid[i-1] if (n_axes >=3 and i-1 < len(self.base_patch_grid)) else self.base_patches
-                
+                base_axis_len = self.base_patch_grid[i-1] if (n_axes >= 3 and i-1 < len(self.base_patch_grid)) else self.base_patches
+
+                if self.yarn_alt_scaling and n_axes >= 3:
+                    # Anisotropic: use per-axis scale instead of global max.
+                    # Axis 1 = height tokens, axis 2 = width tokens (standard RoPE ordering).
+                    axis_scale = scale_h if (i == 1) else scale_w
+                else:
+                    axis_scale = scale_global
+
                 scale_local = max(1.0, current_patches / base_axis_len)
-                dype_kwargs['linear_scale'] = scale_local 
-                
-                if scale_global > 1.0:
+                dype_kwargs = {'dype': self.dype, 'current_timestep': self.current_timestep, 'dype_scale': self.dype_scale, 'dype_exponent': self.dype_exponent, 'ntk_scale': axis_scale, 'override_mscale': current_mscale, 'linear_scale': scale_local}
+
+                if axis_scale > 1.0:
                     cos, sin = get_1d_dype_yarn_pos_embed(**common_kwargs, ori_max_pe_len=base_axis_len, **dype_kwargs)
                 else:
                     cos, sin = get_1d_ntk_pos_embed(**common_kwargs, ntk_factor=1.0)

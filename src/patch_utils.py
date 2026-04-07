@@ -1,5 +1,7 @@
 import math
 import types
+import logging
+import traceback
 import torch
 import torch.nn.functional as F
 import comfy
@@ -10,6 +12,8 @@ from .models.flux import PosEmbedFlux
 from .models.nunchaku import PosEmbedNunchaku
 from .models.qwen import PosEmbedQwen
 from .models.zimage import PosEmbedZImage
+
+log = logging.getLogger("ComfyUI-DyPE")
 
 def apply_dype_to_model(model: ModelPatcher, model_type: str, width: int, height: int, method: str, yarn_alt_scaling: bool, enable_dype: bool, dype_scale: float, dype_exponent: float, base_shift: float, max_shift: float, base_resolution: int = 1024, dype_start_sigma: float = 1.0) -> ModelPatcher:
     m = model.clone()
@@ -72,7 +76,11 @@ def apply_dype_to_model(model: ModelPatcher, model_type: str, width: int, height
 
     if enable_dype and should_patch_schedule:
         try:
-            if isinstance(m.model.model_sampling, model_sampling.ModelSamplingFlux) or is_qwen or is_z_image:
+            is_flux_sampling = isinstance(m.model.model_sampling, model_sampling.ModelSamplingFlux)
+            if not is_flux_sampling:
+                is_flux_sampling = hasattr(m.model.model_sampling, 'set_parameters')
+
+            if is_flux_sampling or is_qwen or is_z_image:
                 latent_h, latent_w = height // 8, width // 8
                 padded_h, padded_w = math.ceil(latent_h / patch_size) * patch_size, math.ceil(latent_w / patch_size) * patch_size
                 image_seq_len = (padded_h // patch_size) * (padded_w // patch_size)
@@ -97,8 +105,12 @@ def apply_dype_to_model(model: ModelPatcher, model_type: str, width: int, height
 
                 m.add_object_patch("model_sampling", new_model_sampler)
                 m.model._dype_params = new_dype_params
-        except:
-            pass
+                log.info(f"[DyPE] Applied shift={dype_shift:.4f} (base_shift={base_shift}, max_shift={max_shift}, seq_len={image_seq_len})")
+            else:
+                log.warning(f"[DyPE] Model sampling type '{type(m.model.model_sampling).__name__}' not recognized as Flux-compatible. Schedule patch skipped.")
+        except Exception as e:
+            log.error(f"[DyPE] Failed to patch model sampling schedule: {e}")
+            traceback.print_exc()
 
     elif not enable_dype:
         if hasattr(m.model, "_dype_params"):
